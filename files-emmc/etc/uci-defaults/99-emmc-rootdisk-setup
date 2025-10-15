@@ -1,0 +1,80 @@
+#!/bin/sh
+
+# eMMC 首启自动扩容：
+# - 检测 /dev/mmcblk0 是否存在；
+# - 使用 parted 读取空闲空间，创建一个覆盖剩余空间的分区（label: rootdisk）；
+# - 格式化为 ext4；
+# - 写入 /etc/config/fstab 将该分区作为 overlay；
+# - 自动重启以应用 overlay（extroot）。
+
+EMMC_DEV="/dev/mmcblk0"
+
+# 仅在 eMMC 设备且首次运行时执行
+[ -b "$EMMC_DEV" ] || exit 0
+
+# 已存在 rootdisk 标签则跳过
+if blkid | grep -q 'LABEL="rootdisk"'; then
+  exit 0
+fi
+
+# 依赖工具检查
+for cmd in parted lsblk blkid; do
+  command -v "$cmd" >/dev/null 2>&1 || exit 0
+done
+
+# 读取剩余空闲区域（MiB）
+FREE_LINE=$(parted -m "$EMMC_DEV" unit MiB print free | awk -F: '/free/ {last=$0} END{print last}')
+FREE_START=$(echo "$FREE_LINE" | awk -F: '{print $2}' | sed 's/MiB//')
+FREE_END=$(echo "$FREE_LINE" | awk -F: '{print $3}' | sed 's/MiB//')
+
+# 空闲空间不足则跳过（<1024MiB）
+if [ -z "$FREE_START" ] || [ -z "$FREE_END" ]; then
+  exit 0
+fi
+FREE_SIZE=$(awk -v s="$FREE_START" -v e="$FREE_END" 'BEGIN{print int(e)-int(s)}')
+if [ "$FREE_SIZE" -lt 1024 ]; then
+  exit 0
+fi
+
+# 创建 rootdisk 分区并刷新内核分区表
+parted -s "$EMMC_DEV" unit MiB mkpart rootdisk "$FREE_START" "$FREE_END" || exit 0
+partprobe "$EMMC_DEV" || true
+
+# 获取新分区设备名
+NEW_PART=$(lsblk -rno NAME "$EMMC_DEV" | tail -n 1)
+NEW_DEV="/dev/$NEW_PART"
+[ -b "$NEW_DEV" ] || exit 0
+
+# 优先使用 f2fs，若工具不可用则回退 ext4
+FS=ext4
+if command -v mkfs.f2fs >/dev/null 2>&1; then
+  FS=f2fs
+fi
+
+if [ "$FS" = "f2fs" ]; then
+  mkfs.f2fs -f -l rootdisk "$NEW_DEV" || FS=ext4
+fi
+
+if [ "$FS" = "ext4" ]; then
+  command -v mkfs.ext4 >/dev/null 2>&1 || exit 0
+  mkfs.ext4 -F -L rootdisk "$NEW_DEV" || exit 0
+fi
+
+UUID=$(blkid -s UUID -o value "$NEW_DEV")
+
+# 写入 fstab 作为 overlay；ImmortalWrt/OpenWrt 使用 /overlay 作为挂载点
+uci -q batch <<-EOF
+  set fstab.overlay="mount"
+  set fstab.overlay.enabled="1"
+  set fstab.overlay.target="/overlay"
+  set fstab.overlay.fstype="$FS"
+  set fstab.overlay.options="rw,noatime"
+  set fstab.overlay.uuid="$UUID"
+  set fstab.overlay.is_rootfs="1"
+  commit fstab
+EOF
+
+logger -t emmc-rootdisk "Created $NEW_DEV (UUID=$UUID), will reboot to apply overlay."
+( sleep 8; reboot ) &
+
+exit 0
