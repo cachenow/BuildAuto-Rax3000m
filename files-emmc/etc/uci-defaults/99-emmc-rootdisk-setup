@@ -2,10 +2,11 @@
 
 # eMMC 首启自动扩容：
 # - 检测 /dev/mmcblk0 是否存在；
-# - 使用 parted 读取空闲空间，创建一个覆盖剩余空间的分区（label: rootdisk）；
+# - 优先使用 sgdisk 自动创建覆盖剩余空间的新分区（label: rootdisk）；如无 sgdisk 则回退到 parted；
 # - 格式化为 ext4；
 # - 写入 /etc/config/fstab 将该分区作为 overlay；
 # - 自动重启以应用 overlay（extroot）。
+# - 如担心内核尚未刷新分区表，脚本在创建分区后会主动刷新分区表（优先使用 partprobe，不可用则回退到 blockdev --rereadpt）。
 
 EMMC_DEV="/dev/mmcblk0"
 
@@ -17,32 +18,47 @@ if blkid | grep -q 'LABEL="rootdisk"'; then
   exit 0
 fi
 
-# 依赖工具检查
-for cmd in parted lsblk blkid; do
-  command -v "$cmd" >/dev/null 2>&1 || exit 0
-done
+# 依赖工具检查（降依赖：优先 sgdisk，其次 parted；必须具备 blkid 与 mkfs）
+command -v blkid >/dev/null 2>&1 || exit 0
+HAS_SGDISK=0
+HAS_PARTED=0
+command -v sgdisk >/dev/null 2>&1 && HAS_SGDISK=1
+command -v parted >/dev/null 2>&1 && HAS_PARTED=1
+[ "$HAS_SGDISK" = "1" ] || [ "$HAS_PARTED" = "1" ] || exit 0
 
-# 读取剩余空闲区域（MiB）
-FREE_LINE=$(parted -m "$EMMC_DEV" unit MiB print free | awk -F: '/free/ {last=$0} END{print last}')
-FREE_START=$(echo "$FREE_LINE" | awk -F: '{print $2}' | sed 's/MiB//')
-FREE_END=$(echo "$FREE_LINE" | awk -F: '{print $3}' | sed 's/MiB//')
-
-# 空闲空间不足则跳过（<1024MiB）
-if [ -z "$FREE_START" ] || [ -z "$FREE_END" ]; then
-  exit 0
+if [ "$HAS_SGDISK" = "1" ]; then
+  # 使用 sgdisk 自动占用最大空闲区创建 rootdisk 分区（类型 0x8300）
+  sgdisk -n 0:0:0 -t 0:8300 -c 0:rootdisk "$EMMC_DEV" || exit 0
+  # 刷新内核分区表
+  if command -v partprobe >/dev/null 2>&1; then
+    partprobe "$EMMC_DEV" || true
+  elif command -v blockdev >/dev/null 2>&1; then
+    blockdev --rereadpt "$EMMC_DEV" || true
+  fi
+else
+  # 回退：使用 parted 读取空闲空间并创建 rootdisk 分区
+  FREE_LINE=$(parted -m "$EMMC_DEV" unit MiB print free | awk -F: '/free/ {last=$0} END{print last}')
+  FREE_START=$(echo "$FREE_LINE" | awk -F: '{print $2}' | sed 's/MiB//')
+  FREE_END=$(echo "$FREE_LINE" | awk -F: '{print $3}' | sed 's/MiB//')
+  # 空闲空间不足则跳过（<1024MiB）
+  if [ -z "$FREE_START" ] || [ -z "$FREE_END" ]; then
+    exit 0
+  fi
+  FREE_SIZE=$(awk -v s="$FREE_START" -v e="$FREE_END" 'BEGIN{print int(e)-int(s)}')
+  if [ "$FREE_SIZE" -lt 1024 ]; then
+    exit 0
+  fi
+  parted -s "$EMMC_DEV" unit MiB mkpart rootdisk "$FREE_START" "$FREE_END" || exit 0
+  # 刷新内核分区表
+  if command -v partprobe >/dev/null 2>&1; then
+    partprobe "$EMMC_DEV" || true
+  elif command -v blockdev >/dev/null 2>&1; then
+    blockdev --rereadpt "$EMMC_DEV" || true
+  fi
 fi
-FREE_SIZE=$(awk -v s="$FREE_START" -v e="$FREE_END" 'BEGIN{print int(e)-int(s)}')
-if [ "$FREE_SIZE" -lt 1024 ]; then
-  exit 0
-fi
 
-# 创建 rootdisk 分区并刷新内核分区表
-parted -s "$EMMC_DEV" unit MiB mkpart rootdisk "$FREE_START" "$FREE_END" || exit 0
-partprobe "$EMMC_DEV" || true
-
-# 获取新分区设备名
-NEW_PART=$(lsblk -rno NAME "$EMMC_DEV" | tail -n 1)
-NEW_DEV="/dev/$NEW_PART"
+# 获取新分区设备名（降依赖：不用 lsblk，按序号取最大分区）
+NEW_DEV=$(ls /dev/mmcblk0p* 2>/dev/null | sort -V | tail -n 1)
 [ -b "$NEW_DEV" ] || exit 0
 
 # 优先使用 f2fs，若工具不可用则回退 ext4
