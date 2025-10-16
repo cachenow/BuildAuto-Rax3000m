@@ -105,18 +105,33 @@ jobs:
             rm -rf $OPENWRT_PATH/files
             cp -r "$GITHUB_WORKSPACE/files-emmc" "$OPENWRT_PATH/files"
           fi
-          # Add packages required for auto partitioning and overlay (avoid heredoc for YAML safety)
+          # Add packages required for auto partitioning and overlay (降依赖：移除 parted/lsblk，保留 gdisk)
           {
             echo 'CONFIG_PACKAGE_block-mount=y'
-            echo 'CONFIG_PACKAGE_parted=y'
             echo 'CONFIG_PACKAGE_gdisk=y'
-            echo 'CONFIG_PACKAGE_lsblk=y'
+            echo 'CONFIG_PACKAGE_blkid=y'
             echo 'CONFIG_PACKAGE_e2fsprogs=y'
             echo 'CONFIG_PACKAGE_kmod-fs-ext4=y'
             echo 'CONFIG_PACKAGE_kmod-fs-f2fs=y'
             echo 'CONFIG_PACKAGE_f2fs-tools=y'
           } >> $OPENWRT_PATH/.config
         fi
+
+        # Dynamically switch device profile using a single base .config
+        # This scans upstream device definitions to pick the right variant.
+        DEV_EMMC=$(awk -F'/' '/^define Device\/cmcc_rax3000m/{print $2}' target/linux/mediatek/image/filogic.mk | grep -v 'nand' | head -n 1)
+        DEV_NAND=$(awk -F'/' '/^define Device\/cmcc_rax3000m/{print $2}' target/linux/mediatek/image/filogic.mk | grep 'nand' | grep -E 'uboot|ubootmod' | head -n 1)
+        if [ -z "$DEV_EMMC" ]; then DEV_EMMC=cmcc_rax3000m; fi
+        if [ -z "$DEV_NAND" ]; then DEV_NAND=cmcc_rax3000m-nand-ubootmod; fi
+        if [ "${{ matrix.target }}" = "nand" ]; then DEV_SEL="$DEV_NAND"; else DEV_SEL="$DEV_EMMC"; fi
+        echo "Selecting device: $DEV_SEL"
+        # Clean existing device/profile lines, then set chosen device
+        sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config || true
+        sed -i '/^CONFIG_TARGET_PROFILE=/d' .config || true
+        {
+          echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${DEV_SEL}=y"
+          echo "CONFIG_TARGET_PROFILE=\"DEVICE_${DEV_SEL}\""
+        } >> .config
 
     - name: SSH connection to Actions
       uses: P3TERX/ssh2actions@v1.0.0
@@ -170,6 +185,11 @@ jobs:
         INITRAMFS=$(ls *-initramfs-recovery.itb 2>/dev/null || true)
         if [ -n "$INITRAMFS" ]; then
           mv "$INITRAMFS" "${INITRAMFS%.itb}-${{ matrix.target }}.itb"
+        fi
+        # Also handle BIN outputs when building BIN variants
+        SYSUP_BIN=$(ls *-squashfs-sysupgrade.bin 2>/dev/null || true)
+        if [ -n "$SYSUP_BIN" ]; then
+          mv "$SYSUP_BIN" "${SYSUP_BIN%.bin}-${{ matrix.target }}.bin"
         fi
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_ENV
