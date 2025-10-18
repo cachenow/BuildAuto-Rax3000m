@@ -1,4 +1,4 @@
-name: Build OpenWrt (NAND/eMMC)
+name: Build OpenWrt
 
 on:
   repository_dispatch:
@@ -26,10 +26,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [nand, emmc]
 
     steps:
     - name: Check Server Performance
@@ -68,7 +64,7 @@ jobs:
         temp-reserve-mb: 100
         root-reserve-mb: 1024
 
-    - name: Checkout (${{ matrix.target }})
+    - name: Checkout
       uses: actions/checkout@main
 
     - name: Clone source code
@@ -91,47 +87,13 @@ jobs:
     - name: Install feeds
       run: cd $OPENWRT_PATH && ./scripts/feeds install -a
 
-    - name: Load custom configuration (${{ matrix.target }})
+    - name: Load custom configuration
       run: |
         [ -e files ] && mv files $OPENWRT_PATH/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE $OPENWRT_PATH/.config
         chmod +x $DIY_P2_SH
         cd $OPENWRT_PATH
         $GITHUB_WORKSPACE/$DIY_P2_SH
-        # Apply eMMC-specific overlay and config packages
-        if [ "${{ matrix.target }}" = "emmc" ]; then
-          # Use files-emmc overlay if present
-          if [ -d "$GITHUB_WORKSPACE/files-emmc" ]; then
-            rm -rf $OPENWRT_PATH/files
-            cp -r "$GITHUB_WORKSPACE/files-emmc" "$OPENWRT_PATH/files"
-          fi
-          # Add packages required for auto partitioning and overlay (降依赖：移除 parted/lsblk，保留 gdisk)
-          {
-            echo 'CONFIG_PACKAGE_block-mount=y'
-            echo 'CONFIG_PACKAGE_gdisk=y'
-            echo 'CONFIG_PACKAGE_blkid=y'
-            echo 'CONFIG_PACKAGE_e2fsprogs=y'
-            echo 'CONFIG_PACKAGE_kmod-fs-ext4=y'
-            echo 'CONFIG_PACKAGE_kmod-fs-f2fs=y'
-            echo 'CONFIG_PACKAGE_f2fs-tools=y'
-          } >> $OPENWRT_PATH/.config
-        fi
-
-        # Dynamically switch device profile using a single base .config
-        # This scans upstream device definitions to pick the right variant.
-        DEV_EMMC=$(awk -F'/' '/^define Device\/cmcc_rax3000m/{print $2}' target/linux/mediatek/image/filogic.mk | grep -v 'nand' | head -n 1)
-        DEV_NAND=$(awk -F'/' '/^define Device\/cmcc_rax3000m/{print $2}' target/linux/mediatek/image/filogic.mk | grep 'nand' | grep -E 'uboot|ubootmod' | head -n 1)
-        if [ -z "$DEV_EMMC" ]; then DEV_EMMC=cmcc_rax3000m; fi
-        if [ -z "$DEV_NAND" ]; then DEV_NAND=cmcc_rax3000m-nand-ubootmod; fi
-        if [ "${{ matrix.target }}" = "nand" ]; then DEV_SEL="$DEV_NAND"; else DEV_SEL="$DEV_EMMC"; fi
-        echo "Selecting device: $DEV_SEL"
-        # Clean existing device/profile lines, then set chosen device
-        sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config || true
-        sed -i '/^CONFIG_TARGET_PROFILE=/d' .config || true
-        {
-          echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${DEV_SEL}=y"
-          echo "CONFIG_TARGET_PROFILE=\"DEVICE_${DEV_SEL}\""
-        } >> .config
 
     - name: SSH connection to Actions
       uses: P3TERX/ssh2actions@v1.0.0
@@ -149,7 +111,7 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Compile the firmware (${{ matrix.target }})
+    - name: Compile the firmware
       id: compile
       run: |
         cd $OPENWRT_PATH
@@ -164,41 +126,37 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
-    - name: Upload bin directory (${{ matrix.target }})
+    - name: Upload bin directory
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
-        name: OpenWrt_bin_${{ matrix.target }}${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.OPENWRT_PATH }}/bin
 
-    - name: Organize files (${{ matrix.target }})
+    - name: Organize files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
         rm -rf packages
-        # Rename sysupgrade/initramfs to include target suffix to avoid collisions
-        SYSUP=$(ls *-squashfs-sysupgrade.itb 2>/dev/null || true)
-        if [ -n "$SYSUP" ]; then
-          mv "$SYSUP" "${SYSUP%.itb}-${{ matrix.target }}.itb"
-        fi
-        INITRAMFS=$(ls *-initramfs-recovery.itb 2>/dev/null || true)
-        if [ -n "$INITRAMFS" ]; then
-          mv "$INITRAMFS" "${INITRAMFS%.itb}-${{ matrix.target }}.itb"
-        fi
-        # Also handle BIN outputs when building BIN variants
-        SYSUP_BIN=$(ls *-squashfs-sysupgrade.bin 2>/dev/null || true)
-        if [ -n "$SYSUP_BIN" ]; then
-          mv "$SYSUP_BIN" "${SYSUP_BIN%.bin}-${{ matrix.target }}.bin"
-        fi
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_ENV
 
-    - name: Upload firmware directory (${{ matrix.target }})
+    - name: Produce .bin alias for ITB images
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      run: |
+        cd $FIRMWARE
+        for f in *-sysupgrade.itb *-initramfs*.itb; do
+          [ -f "$f" ] || continue
+          cp "$f" "${f%.itb}.bin"
+        done
+        sha256sum * > SHA256SUMS
+
+    - name: Upload firmware directory
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt_firmware_${{ matrix.target }}${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
     - name: Upload firmware to cowtransfer
@@ -219,17 +177,17 @@ jobs:
         echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
         echo "url=$(cat wetransfer.log | grep https | cut -f3 -d' ')" >> $GITHUB_OUTPUT
 
-    - name: Generate release tag (${{ matrix.target }})
+    - name: Generate release tag
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=$(date +'%Y.%m.%d-%H%M')-${{ matrix.target }}" >> $GITHUB_OUTPUT
+        echo "release_tag=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
         touch release.txt
-        [ $UPLOAD_COWTRANSFER = true ] && echo "🔗 [Cowtransfer (${{ matrix.target }})](${{ steps.cowtransfer.outputs.url }})" >> release.txt
-        [ $UPLOAD_WETRANSFER = true ] && echo "🔗 [WeTransfer (${{ matrix.target }})](${{ steps.wetransfer.outputs.url }})" >> release.txt
+        [ $UPLOAD_COWTRANSFER = true ] && echo "🔗 [Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
+        [ $UPLOAD_WETRANSFER = true ] && echo "🔗 [WeTransfer](${{ steps.wetransfer.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Upload firmware to release (${{ matrix.target }})
+    - name: Upload firmware to release
       uses: softprops/action-gh-release@v1
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
