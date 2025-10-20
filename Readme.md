@@ -51,6 +51,7 @@
 
  - 拆机参考视频： https://www.bilibili.com/video/BV1q6MCzWExX/
  - 救砖参考视频： https://www.bilibili.com/video/BV1uaUJYeENm/
+ - 刷机及配置手机Usb网络共享参考视频： https://www.bilibili.com/video/BV1se411n7cZ/
 
 目的：拿到新机（OEM 出厂系统）时，从零开始选择稳定的 U‑Boot 路线（ITB 或 BIN），并完成从入场、备份到刷写与验证的完整流程。
 
