@@ -1,4 +1,4 @@
-# RAX3000M U-Boot WebUI 升级/降级指南（NAND/eMMC）
+# RAX3000M U-Boot WebUI 升级/降级指南
 
 面向 CMCC RAX3000M 的 eMMC（算力版）与 NAND（普通版），本指南提供“仅通过 U-Boot WebUI”完成从支持 BIN 的 U-Boot 切换到支持 ITB（FIT）的 U-Boot，或反向降级回支持 BIN 的 U-Boot，并最终通过 WebUI 刷入系统固件（`.bin` 或 `.itb`）。
 
