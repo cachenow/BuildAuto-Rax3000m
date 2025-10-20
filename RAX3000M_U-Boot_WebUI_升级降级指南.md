@@ -200,6 +200,64 @@
     - `LzxkJ04/RAX3000Me`（Windows 脚本化 SN 派生）：https://github.com/LzxkJ04/RAX3000Me
     - `sh1marin`（日志揭示与正确引用方式）：https://blog.sh1mar.in/post/cmcc-rax3000m/
 
+### 另一种解决方案：SN 派生密钥 + Telnet/TFTP 入场（适用于后加密/地区版）
+
+适用场景
+- 适用于后加密批次或特殊地区版（如广东版），固定密钥与通用 openssl 解密失败（bad decrypt）。
+- 思路：按 SN 派生密码 → 用派生密码加密 Telnet 解锁配置 → 导入开启 Telnet → 通过 Telnet 拉取并写入 FIP/UBoot → 进入 U-Boot 执行既有流程。
+
+前置准备
+- Linux/WSL/Ubuntu 终端，已安装 `openssl`、`wget`。
+- Windows 下准备 Telnet 客户端（系统自带或 `PuTTY`）、`Tftpd64` 便携版。
+- 路由与 PC 直连同网段；记下 PC 网卡 `IP`（示例 `192.168.1.100`）。
+
+步骤
+1. 读取设备 SN
+- 在设备背面标签找到序列号，示例：`SN=5D11210006XXXXX`
+- 在 Linux 终端执行：`SN=5D11210006XXXXX`
+
+2. 生成派生密码
+- `mypassword=$(openssl passwd -1 -salt aV6dW8bD "$SN")`
+- `mypassword=$(eval "echo $mypassword")`
+- `echo "$mypassword"`（注意引用，密码中含 `$` 与 `/`）
+
+3. 下载 Telnet 解锁配置模板
+- `wget "https://github.com/Daniel-Hwang/RAX3000Me/raw/refs/heads/release-v1.0.0/20241111-RAX3000Me_Step12-TelnetUboot/RAX3000M_XR30_cfg-telnet-20240117.conf"`
+- 如链接失效，请参考“参考与来源”或社区镜像。
+
+4. 用派生密码加密配置并生成导入包
+- `openssl aes-256-cbc -pbkdf2 -k "$mypassword" -in RAX3000M_XR30_cfg-telnet-20240117.conf -out cfg_import_config_file_new.conf`
+
+5. 导入配置以开启 Telnet
+- 通过原厂 WebUI 的“配置导入/恢复”入口导入 `cfg_import_config_file_new.conf`。
+- 成功后，Telnet 端口 `23` 开启，路由 IP 记为 `R_IP`（常见为 `192.168.1.1` 或 `192.168.10.1`）。
+
+6. 连接 Telnet
+- Windows：在 PowerShell/命令提示符执行 `telnet <R_IP>`；或使用 `PuTTY` 选择 `Telnet` 协议。
+- Linux/WSL：`telnet <R_IP>`
+
+7. 准备 Tftpd64（Windows）
+- 下载并解压 Tftpd64 便携版（官方 Releases：`https://github.com/PJO2/tftpd64/releases`，选择 64-bit portable ZIP）。
+- 打开 `tftpd64.exe`，切换到 `Log Viewer`；`Current Directory` 指向 U-Boot/FIP 文件所在目录；`Server interface` 选择 `PC_IP` 网卡。
+
+8. 在路由 Telnet 中拉取文件到 `/tmp`
+- 示例命令：`tftp -g -r <fip_or_uboot.bin> -l /tmp/<fip_or_uboot.bin> <PC_IP>`
+- 传输成功将在 Tftpd64 的 Log 中看到 RRQ 记录。
+
+9. 写入 FIP/UBoot（以 eMMC FIP 为例）
+- `dd if=/tmp/mt7981_cmcc_rax3000m-emmc-fip.bin of=/dev/mmcblk0p3`
+- 预期输出类似 `1148+1 records in` / `1148+1 records out`；随后执行 `sync`
+
+10. 进入 U-Boot 并继续后续刷机
+- 断电 → 按住 `Reset` → 上电 5–10 秒 → 指示灯变红/绿后松手。
+- 浏览器访问 `http://192.168.1.1/` 进入 U-Boot 页面，按本指南既有 `itb/bin` 流程操作。
+
+注意与提示
+- 命令中的密码变量必须使用双引号：`"$mypassword"`，避免 `$`、`!` 等字符被 Shell 解释。
+- `R_IP` 与 `PC_IP` 请替换为实际地址；若 Telnet 连接失败，重试导入配置或检查网段/防火墙。
+- NAND/eMMC 的分区设备号不同，`dd` 目标需按机型/介质确认；误写将导致不可启动。
+- 若仍出现 `bad decrypt` 或配置上传失败，请改回“固定密钥路线”或参考“密钥参考”区块的故障排查。
+
 ### 入场方式（原厂未必有 WebUI，串口/TFTP 为主）
 - 串口入场（强烈推荐）：连接 3.3V TTL（GND/TX/RX，115200），上电按任意键中断启动。多数原厂固件并不启用 U‑Boot 的 HTTP/WebUI，串口是最稳妥的入口；必要时配合电脑 TFTP 服务进行镜像加载与写入。
 - WebUI 入场（仅限设备已带 WebUI）：断电→按住 Reset→上电 3–5 秒→松手；若所用 U‑Boot 变种支持 HTTP，则浏览器访问 `http://192.168.1.1/` 可进入 WebUI。若 DHCP 不工作，电脑设静态 `192.168.1.2/255.255.255.0`，网关 `192.168.1.1`。
@@ -324,6 +382,40 @@ BL2 更换的判断（复述要点）：默认只换 FIP 即可；如无法进�
  - BIN：`emmc-gpt.bin`、`emmc-bl2.bin`、`emmc-fip.bin`（或 `mt7981_cmcc_rax3000m-fip-fixed-parts.bin`，含 WebUI），以及与你所选布局匹配的 BIN 格式固件。
 
 ### OEM → OpenWrt（获取 SSH/串口，首刷到系统）
+
+#### 通用方法：SN 派生密钥 + Telnet/TFTP 入场（后加密/地区版）
+- 适用：后加密批次或特殊地区版（如广东版），固定密钥/通用 openssl 解密失败时。
+- 提要：按 SN 派生密码 → 用派生密码加密 Telnet 解锁配置 → 导入开启 Telnet → 通过 Telnet+TFTP 拉取并写入 U‑Boot/FIP → 进入 U‑Boot 执行后续流程。
+
+步骤简版
+- 读取 SN：在设备背面找到序列号，`SN=5D11210006XXXXX`；在 Linux 终端执行 `SN=5D11210006XXXXX`。
+- 生成派生密码：
+  - `mypassword=$(openssl passwd -1 -salt aV6dW8bD "$SN")`
+  - `mypassword=$(eval "echo $mypassword")`
+  - `echo "$mypassword"`
+- 下载配置模板：
+  - `wget "https://github.com/Daniel-Hwang/RAX3000Me/raw/refs/heads/release-v1.0.0/20241111-RAX3000Me_Step12-TelnetUboot/RAX3000M_XR30_cfg-telnet-20240117.conf"`
+  - 如失效，请参见“配置文件解密密钥参考”区块与社区镜像。
+- 加密并导入：
+  - `openssl aes-256-cbc -pbkdf2 -k "$mypassword" -in RAX3000M_XR30_cfg-telnet-20240117.conf -out cfg_import_config_file_new.conf`
+  - 通过原厂 WebUI 的“配置导入/恢复”导入 `cfg_import_config_file_new.conf`；成功后 Telnet 端口 23 开启，路由 IP 记为 `R_IP`。
+- 连接 Telnet：`telnet <R_IP>`（Windows 可用自带 Telnet 或 PuTTY）。
+- 准备 TFTP：Windows 推荐使用官方便携版 Tftpd64（`https://github.com/PJO2/tftpd64/releases`），在 `Log Viewer` 选择 U‑Boot/FIP 所在目录与 `Server interface=PC_IP`。
+- 路由端拉取到 `/tmp`：
+  - `tftp -g -r <fip_or_uboot.bin> -l /tmp/<fip_or_uboot.bin> <PC_IP>`
+- 写入并同步（按介质选择）：
+  - eMMC：`dd if=/tmp/<emmc-fip.bin> of=/dev/mmcblk0p3 && sync`（或按后文 `seek=13312` 写法）
+  - NAND：`mtd write /tmp/<nand-fip.bin> FIP && sync`
+
+下一步（按固件格式选择）
+- 选择 ITB：进入 U‑Boot WebUI 或用 TFTP 首刷 `initramfs-recovery.itb`，进入系统后升级到 `squashfs-sysupgrade.itb`（参考“eMMC → ITB”“NAND → ITB”流程）。
+- 选择 BIN：确保所刷 FIP 支持 BIN（eMMC 选 `emmc-fip.bin` 或社区 WebUI FIP；NAND 选 `mt7981_cmcc_rax3000m-fip-fixed-parts.bin`），在 WebUI 上传与布局匹配的 `.bin`（参考“eMMC → BIN”“NAND → BIN”流程）。
+
+注意
+- 始终使用双引号：`"$mypassword"`，避免 `$`、`!` 被 Shell 解释。
+- `R_IP` 与 `PC_IP` 为占位，替换为实际地址；必要时检查网段/防火墙。
+- eMMC 与 NAND 的分区设备不同，误写会导致不可启动；务必确认目标设备号。
+- 如出现 `bad decrypt` 或上传失败，可回退“固定密钥路线”或查阅“配置文件解密密钥参考（批次归类与操作建议）”。
 - 工具与准备：
   - 免拆：获取 OEM 的 SSH/Telnet（参考“参考与来源”的 OEM 教程），或通过漏洞/页面启用；已进系统可用 `scp` 上传文件。
   - 串口：USB‑TTL（3.3V，115200 8N1），短接复位进入 U‑Boot；备用 TFTP 服务（PC 设 `192.168.1.254`）。
