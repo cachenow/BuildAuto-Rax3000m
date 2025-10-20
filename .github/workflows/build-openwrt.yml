@@ -13,9 +13,11 @@ env:
   REPO_URL:  https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: openwrt-24.10
   FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: .config
+  CONFIG_NAND_FILE: .config-nand
+  CONFIG_EMMC_FILE: .config-emmc
   DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
+  DIY_P2_NAND_SH: diy-part2-nand.sh
+  DIY_P2_EMMC_SH: diy-part2-emmc.sh
   UPLOAD_BIN_DIR: true
   UPLOAD_FIRMWARE: true
   UPLOAD_COWTRANSFER: false
@@ -93,19 +95,22 @@ jobs:
     - name: Load custom configuration
       run: |
         [ -e files ] && mv files $OPENWRT_PATH/files
-        chmod +x $DIY_P2_SH
         cd $OPENWRT_PATH
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        
+        # Execute variant-specific DIY script
+        if [ "${{ matrix.variant }}" = "nand" ]; then
+          chmod +x "$GITHUB_WORKSPACE/$DIY_P2_NAND_SH"
+          "$GITHUB_WORKSPACE/$DIY_P2_NAND_SH"
+        else
+          chmod +x "$GITHUB_WORKSPACE/$DIY_P2_EMMC_SH"
+          "$GITHUB_WORKSPACE/$DIY_P2_EMMC_SH"
+        fi
+        
         # Select matrix config
         if [ "${{ matrix.variant }}" = "nand" ]; then
-          SRC="$GITHUB_WORKSPACE/.config-nand"
+          cp -f "$GITHUB_WORKSPACE/$CONFIG_NAND_FILE" .config
         else
-          SRC="$GITHUB_WORKSPACE/.config-emmc"
-        fi
-        if [ -f "$SRC" ]; then
-          cp -f "$SRC" .config
-        elif [ -f "$GITHUB_WORKSPACE/.config" ]; then
-          cp -f "$GITHUB_WORKSPACE/.config" .config
+          cp -f "$GITHUB_WORKSPACE/$CONFIG_EMMC_FILE" .config
         fi
 
     - name: Download package
