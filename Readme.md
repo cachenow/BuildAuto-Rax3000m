@@ -49,6 +49,8 @@
 
 ## 新机原厂固件 → 稳定 U‑Boot（选型与完整步骤）
 
+ - 拆机参考视频： https://www.bilibili.com/video/BV1q6MCzWExX/
+
 目的：拿到新机（OEM 出厂系统）时，从零开始选择稳定的 U‑Boot 路线（ITB 或 BIN），并完成从入场、备份到刷写与验证的完整流程。
 
 ### 从原厂系统开启 SSH 权限（免拆，NAND/eMMC 通用）
