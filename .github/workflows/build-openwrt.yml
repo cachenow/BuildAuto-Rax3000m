@@ -133,7 +133,7 @@ jobs:
         # Rename sysupgrade filename by variant
         FW_DIR=$(ls -d bin/targets/*/*)
         cd "$FW_DIR"
-        SYS=$(ls *cmcc_rax3000m-squashfs-sysupgrade.itb 2>/dev/null | head -n1)
+        SYS=$(ls *squashfs-sysupgrade.itb 2>/dev/null | head -n1)
         if [ -n "$SYS" ]; then
           if [ "${{ matrix.variant }}" = "nand" ]; then
             mv -f "$SYS" "immortalwrt-mediatek-filogic-cmcc_rax3000m-nand-squashfs-sysupgrade.itb"
@@ -143,7 +143,7 @@ jobs:
         fi
         cd "$OPENWRT_PATH"
 
-        echo "status=success" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
@@ -179,7 +179,7 @@ jobs:
   publish:
     runs-on: ubuntu-22.04
     needs: build
-    if: always() && contains(needs.build.result, 'success')
+    if: needs.build.result == 'success'
 
     steps:
     - name: Download eMMC firmware
@@ -196,27 +196,6 @@ jobs:
         path: firmware_nand
       continue-on-error: true
 
-    - name: Debug downloaded artifacts
-      run: |
-        echo "=== Debugging downloaded artifacts ==="
-        echo "Current directory: $PWD"
-        echo "Directory contents:"
-        ls -la
-        echo "=== firmware_emmc directory ==="
-        if [ -d firmware_emmc ]; then
-          echo "firmware_emmc exists"
-          ls -la firmware_emmc/
-        else
-          echo "firmware_emmc does not exist"
-        fi
-        echo "=== firmware_nand directory ==="
-        if [ -d firmware_nand ]; then
-          echo "firmware_nand exists"
-          ls -la firmware_nand/
-        else
-          echo "firmware_nand does not exist"
-        fi
-
     - name: Merge and prune
       run: |
         # Handle NAND firmware if exists
@@ -225,7 +204,7 @@ jobs:
           find . -type f ! -name "*-nand-squashfs-sysupgrade.itb" -delete
           find . -type d -empty -delete
           cd ..
-          if ls firmware_nand/*.itb 1> /dev/null 2>&1; then
+          if [ -d firmware_emmc ] && ls firmware_nand/*.itb 1> /dev/null 2>&1; then
             cp -f firmware_nand/*.itb firmware_emmc/
           fi
         fi
@@ -242,7 +221,7 @@ jobs:
 
     - name: Generate release tag
       id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: success() && env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "release_tag=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
         touch release.txt
@@ -250,7 +229,7 @@ jobs:
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@v1
-      if: steps.tag.outputs.status == 'success' && !cancelled()
+      if: success() && steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -266,7 +245,7 @@ jobs:
 
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@v0.1.0
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: success() && env.UPLOAD_RELEASE == 'true' && !cancelled()
       with:
         keep_latest: 5
         delete_tags: true
