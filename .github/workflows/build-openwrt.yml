@@ -183,14 +183,14 @@ jobs:
 
     steps:
     - name: Download eMMC firmware
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: firmware-emmc
         path: firmware_emmc
       continue-on-error: true
 
     - name: Download NAND firmware
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: firmware-nand
         path: firmware_nand
