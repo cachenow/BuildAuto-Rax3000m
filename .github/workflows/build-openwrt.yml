@@ -166,7 +166,7 @@ jobs:
         cd $OPENWRT_PATH/bin/targets/*/*
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
 
 
     - name: Upload firmware directory
@@ -179,7 +179,7 @@ jobs:
   publish:
     runs-on: ubuntu-22.04
     needs: build
-    if: always() && (needs.build.result == 'success' || contains(needs.build.outputs.*, 'success'))
+    if: always() && contains(needs.build.result, 'success')
 
     steps:
     - name: Download eMMC firmware
@@ -195,6 +195,27 @@ jobs:
         name: firmware-nand
         path: firmware_nand
       continue-on-error: true
+
+    - name: Debug downloaded artifacts
+      run: |
+        echo "=== Debugging downloaded artifacts ==="
+        echo "Current directory: $PWD"
+        echo "Directory contents:"
+        ls -la
+        echo "=== firmware_emmc directory ==="
+        if [ -d firmware_emmc ]; then
+          echo "firmware_emmc exists"
+          ls -la firmware_emmc/
+        else
+          echo "firmware_emmc does not exist"
+        fi
+        echo "=== firmware_nand directory ==="
+        if [ -d firmware_nand ]; then
+          echo "firmware_nand exists"
+          ls -la firmware_nand/
+        else
+          echo "firmware_nand does not exist"
+        fi
 
     - name: Merge and prune
       run: |
