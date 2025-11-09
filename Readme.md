@@ -87,19 +87,28 @@
 步骤
 1. 读取设备 SN
 - 在设备背面标签找到序列号，示例：`SN=5D11210006XXXXX`
-- 在 Linux 终端执行：`SN=5D11210006XXXXX`
+- 在 Linux 终端执行：
+```shell
+SN=5D11210006XXXXX
+```
 
 2. 生成派生密码
-- `mypassword=$(openssl passwd -1 -salt aV6dW8bD "$SN")`
-- `mypassword=$(eval "echo $mypassword")`
-- `echo $mypassword"`
+```shell
+mypassword=$(openssl passwd -1 -salt aV6dW8bD "$SN")
+mypassword=$(eval "echo $mypassword")
+echo $mypassword"
+```
 
 3. 下载 Telnet 解锁配置模板
-- `wget "https://github.com/Daniel-Hwang/RAX3000Me/raw/refs/heads/main/20241111-RAX3000Me_Step12-TelnetUboot/RAX3000M_XR30_cfg-telnet-20240117.conf"`
+```shell
+wget https://github.com/Daniel-Hwang/RAX3000Me/raw/refs/heads/main/20241111-RAX3000Me_Step12-TelnetUboot/RAX3000M_XR30_cfg-telnet-20240117.conf
+```
 - 如链接失效，请参考“参考与来源”或社区镜像。
 
 4. 用派生密码加密配置并生成导入包
-- `openssl aes-256-cbc -pbkdf2 -k "$mypassword" -in RAX3000M_XR30_cfg-telnet-20240117.conf -out cfg_import_config_file_new.conf`
+```shell
+openssl aes-256-cbc -pbkdf2 -k "$mypassword" -in RAX3000M_XR30_cfg-telnet-20240117.conf -out cfg_import_config_file_new.conf
+```
 
 5. 导入配置以开启 Telnet
 - 通过原厂 WebUI 的“配置导入/恢复”入口导入 `cfg_import_config_file_new.conf`。
