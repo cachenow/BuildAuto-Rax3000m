@@ -96,6 +96,8 @@ jobs:
       run: |
         [ -e files ] && mv files $OPENWRT_PATH/files
         cd $OPENWRT_PATH
+        # Keep wpad-openssl and make EasyMesh depend on it instead of wpad-mbedtls.
+        sed -i "s/+wpad-mbedtls/+wpad-openssl/" feeds/kwrt/luci-app-easymesh/Makefile
         
         # Execute variant-specific DIY script
         if [ "${{ matrix.variant }}" = "nand" ]; then
