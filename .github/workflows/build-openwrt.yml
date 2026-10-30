@@ -1,0 +1,191 @@
+name: Build OpenWrt
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: 'SSH connection to Actions'
+        required: false
+        default: 'false'
+
+env:
+  UPLOAD_RELEASE: 'true'
+  TZ: Asia/Shanghai
+
+jobs:
+  # NAND starts immediately and is unaffected by eMMC CPU selection.
+  nand:
+    name: NAND build
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: nand
+
+  # eMMC attempts run one after another. A rejected CPU consumes no build time.
+  emmc_1:
+    name: eMMC CPU attempt 1/8
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: emmc
+      attempt: 1
+
+  emmc_2:
+    name: eMMC CPU attempt 2/8
+    needs: emmc_1
+    if: ${{ needs.emmc_1.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: emmc
+      attempt: 2
+
+  emmc_3:
+    name: eMMC CPU attempt 3/8
+    needs: emmc_2
+    if: ${{ needs.emmc_2.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: emmc
+      attempt: 3
+
+  emmc_4:
+    name: eMMC CPU attempt 4/8
+    needs: emmc_3
+    if: ${{ needs.emmc_3.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: emmc
+      attempt: 4
+
+  emmc_5:
+    name: eMMC CPU attempt 5/8
+    needs: emmc_4
+    if: ${{ needs.emmc_4.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: emmc
+      attempt: 5
+
+  emmc_6:
+    name: eMMC CPU attempt 6/8
+    needs: emmc_5
+    if: ${{ needs.emmc_5.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: emmc
+      attempt: 6
+
+  emmc_7:
+    name: eMMC CPU attempt 7/8
+    needs: emmc_6
+    if: ${{ needs.emmc_6.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: emmc
+      attempt: 7
+
+  emmc_8:
+    name: eMMC CPU attempt 8/8
+    needs: emmc_7
+    if: ${{ needs.emmc_7.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: emmc
+      attempt: 8
+
+  publish:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: write
+    needs: [nand, emmc_1, emmc_2, emmc_3, emmc_4, emmc_5, emmc_6, emmc_7, emmc_8]
+    if: >-
+      ${{
+      always() && needs.nand.result == 'success' && (
+      (needs.emmc_1.result == 'success' && needs.emmc_1.outputs.cpu_accepted == 'true') ||
+      (needs.emmc_2.result == 'success' && needs.emmc_2.outputs.cpu_accepted == 'true') ||
+      (needs.emmc_3.result == 'success' && needs.emmc_3.outputs.cpu_accepted == 'true') ||
+      (needs.emmc_4.result == 'success' && needs.emmc_4.outputs.cpu_accepted == 'true') ||
+      (needs.emmc_5.result == 'success' && needs.emmc_5.outputs.cpu_accepted == 'true') ||
+      (needs.emmc_6.result == 'success' && needs.emmc_6.outputs.cpu_accepted == 'true') ||
+      (needs.emmc_7.result == 'success' && needs.emmc_7.outputs.cpu_accepted == 'true') ||
+      (needs.emmc_8.result == 'success' && needs.emmc_8.outputs.cpu_accepted == 'true')
+      )
+      }}
+
+    steps:
+    - name: Download eMMC firmware
+      uses: actions/download-artifact@v4
+      with:
+        name: firmware-emmc
+        path: firmware_emmc
+
+    - name: Download NAND firmware
+      uses: actions/download-artifact@v4
+      with:
+        name: firmware-nand
+        path: firmware_nand
+
+    - name: Merge and prune
+      run: |
+        # Handle NAND firmware if exists
+        if [ -d firmware_nand ]; then
+          cd firmware_nand
+          find . -type f ! -name "*-nand-squashfs-sysupgrade.itb" -delete
+          find . -type d -empty -delete
+          cd ..
+          if [ -d firmware_emmc ] && ls firmware_nand/*.itb 1> /dev/null 2>&1; then
+            cp -f firmware_nand/*.itb firmware_emmc/
+          fi
+        fi
+        
+        # Set firmware directory (prefer emmc, fallback to nand if emmc missing)
+        if [ -d firmware_emmc ]; then
+          echo "FIRMWARE_DIR=$PWD/firmware_emmc" >> $GITHUB_ENV
+        elif [ -d firmware_nand ]; then
+          echo "FIRMWARE_DIR=$PWD/firmware_nand" >> $GITHUB_ENV
+        else
+          echo "ERROR: No firmware directory found"
+          exit 1
+        fi
+
+    - name: Generate release tag
+      id: tag
+      if: success() && env.UPLOAD_RELEASE == 'true' && !cancelled()
+      run: |
+        echo "release_tag=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
+        touch release.txt
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload firmware to release
+      uses: softprops/action-gh-release@v1
+      if: success() && steps.tag.outputs.status == 'success' && !cancelled()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
+        files: ${{ env.FIRMWARE_DIR }}/*
+
+    - name: Delete workflow runs
+      uses: GitRML/delete-workflow-runs@main
+      with:
+        retain_days: 30
+        keep_minimum_runs: 0
+
+    - name: Remove old Releases
+      uses: dev-drprasad/delete-older-releases@v0.1.0
+      if: success() && env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 30
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+#    - name: Notification
+#      if: cancelled() == false
+#      uses: cachenow/action-telegram@v1.1
+#      with:
+#        botToken: ${{ secrets.BotToken }}
+#        chatId: ${{ secrets.ChatID }}
+#        jobStatus: ${{ job.status }}
+#        skipSuccess: false
