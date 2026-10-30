@@ -14,14 +14,78 @@ env:
   TZ: Asia/Shanghai
 
 jobs:
-  # NAND starts immediately and is unaffected by eMMC CPU selection.
-  nand:
-    name: NAND build
+  # NAND and eMMC start in parallel. Each retries CPU selection independently.
+  nand_1:
+    name: NAND CPU attempt 1/8
     uses: ./.github/workflows/build-worker.yml
     with:
       variant: nand
+      attempt: 1
 
-  # eMMC attempts run one after another. A rejected CPU consumes no build time.
+  nand_2:
+    name: NAND CPU attempt 2/8
+    needs: nand_1
+    if: ${{ needs.nand_1.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: nand
+      attempt: 2
+
+  nand_3:
+    name: NAND CPU attempt 3/8
+    needs: nand_2
+    if: ${{ needs.nand_2.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: nand
+      attempt: 3
+
+  nand_4:
+    name: NAND CPU attempt 4/8
+    needs: nand_3
+    if: ${{ needs.nand_3.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: nand
+      attempt: 4
+
+  nand_5:
+    name: NAND CPU attempt 5/8
+    needs: nand_4
+    if: ${{ needs.nand_4.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: nand
+      attempt: 5
+
+  nand_6:
+    name: NAND CPU attempt 6/8
+    needs: nand_5
+    if: ${{ needs.nand_5.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: nand
+      attempt: 6
+
+  nand_7:
+    name: NAND CPU attempt 7/8
+    needs: nand_6
+    if: ${{ needs.nand_6.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: nand
+      attempt: 7
+
+  nand_8:
+    name: NAND CPU attempt 8/8
+    needs: nand_7
+    if: ${{ needs.nand_7.outputs.cpu_accepted == 'false' }}
+    uses: ./.github/workflows/build-worker.yml
+    with:
+      variant: nand
+      attempt: 8
+
+  # eMMC attempts run independently of NAND.
   emmc_1:
     name: eMMC CPU attempt 1/8
     uses: ./.github/workflows/build-worker.yml
@@ -97,10 +161,19 @@ jobs:
     permissions:
       contents: write
       actions: write
-    needs: [nand, emmc_1, emmc_2, emmc_3, emmc_4, emmc_5, emmc_6, emmc_7, emmc_8]
+    needs: [nand_1, nand_2, nand_3, nand_4, nand_5, nand_6, nand_7, nand_8, emmc_1, emmc_2, emmc_3, emmc_4, emmc_5, emmc_6, emmc_7, emmc_8]
     if: >-
       ${{
-      always() && needs.nand.result == 'success' && (
+      always() && (
+      (needs.nand_1.result == 'success' && needs.nand_1.outputs.cpu_accepted == 'true') ||
+      (needs.nand_2.result == 'success' && needs.nand_2.outputs.cpu_accepted == 'true') ||
+      (needs.nand_3.result == 'success' && needs.nand_3.outputs.cpu_accepted == 'true') ||
+      (needs.nand_4.result == 'success' && needs.nand_4.outputs.cpu_accepted == 'true') ||
+      (needs.nand_5.result == 'success' && needs.nand_5.outputs.cpu_accepted == 'true') ||
+      (needs.nand_6.result == 'success' && needs.nand_6.outputs.cpu_accepted == 'true') ||
+      (needs.nand_7.result == 'success' && needs.nand_7.outputs.cpu_accepted == 'true') ||
+      (needs.nand_8.result == 'success' && needs.nand_8.outputs.cpu_accepted == 'true')
+      ) && (
       (needs.emmc_1.result == 'success' && needs.emmc_1.outputs.cpu_accepted == 'true') ||
       (needs.emmc_2.result == 'success' && needs.emmc_2.outputs.cpu_accepted == 'true') ||
       (needs.emmc_3.result == 'success' && needs.emmc_3.outputs.cpu_accepted == 'true') ||
